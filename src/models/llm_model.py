@@ -131,9 +131,39 @@ class LLMModel(BaseModel):
         Returns:
             List of predicted ICD10 codes
         """
-        # TODO: Implement flattened prediction strategy
-        # For now, fall back to freeform
-        return self._predict_freeform(transcript)
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a medical coding expert. Given a medical transcript, select the most appropriate ICD10 codes from the list below. Do not hallucinate and you must cite your source",
+            },
+            {
+                "role": "user",
+                "content": f"""## ICD10-Codes:\n{self.hierarchy_loader.get_flattened_list()}""",
+            },
+            {
+                "role": "user",
+                "content": """## Role: 
+            You are an Medical AI Assistant. 
+            ## Task: 
+            You are to listen on to a conversation from doctor/patient and predict the ICD10-codes along with the confidence and reason for choosing those codes. 
+            Please cite your exact source. Ensure the high confidence cases are first and make sure to get all cases! 
+            ## Output Format: 
+            You must output a JSON only: 
+            ```
+            [ 
+                {{ 
+                    'reason': '<reasoning with citation>', 
+                    'confidence': '<number 1-10> where 1 is not confident and 10 is perfectly confident', 
+                    'code': '<ICD10-code>',
+                }}, 
+                .... 
+            ] 
+            """,
+            },
+            {"role": "user", "content": f"## Transcript:\n{transcript}"},
+        ]
+        # Store token count in trace history
+        return self._predict_with_messages(messages)
 
     def _predict_freeform(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using freeform strategy."""
@@ -166,11 +196,14 @@ class LLMModel(BaseModel):
         ]
         # Store token count in trace history
 
+        return self._predict_with_messages(messages)
+
+    def _predict_with_messages(self, messages: List[Dict[str, str]]) -> List[str]:
         self.trace_history.append({"messages": messages})
 
         # Call LLM
         try:
-            response = self._call_llm(messages, self.config.temperature)
+            response = self._call_llm(messages)
         except Exception as e:
             logger.error("Error occured in LLM Response")
             logger.exception(e)
@@ -184,7 +217,7 @@ class LLMModel(BaseModel):
         self.trace_history[-1].update({"output": parsed_output, "codes": codes})
         return codes
 
-    def _call_llm(self, messages: List[Dict[str, str]], temperature: float) -> str:
+    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call LLM with messages.
 
         Args:
