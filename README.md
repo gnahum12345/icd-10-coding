@@ -2,6 +2,10 @@
 
 Extract ICD10 codes from medical transcripts using LLMs with hierarchical prediction, uncertainty quantification, and interactive evaluation.
 
+## Full Slide Deck: 
+
+- https://shorturl.at/sWW9e 
+
 ## Features
 
 - **Hierarchical Prediction**: Layer-by-layer prediction through ICD10 hierarchy
