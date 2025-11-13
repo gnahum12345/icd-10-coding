@@ -1,0 +1,27 @@
+# Configuration for ICD10 Code Extraction System
+
+# LLM Configuration
+llm:
+  provider: "openai"  # "openai", "qwen", etc.
+  model_name: "gpt-5-mini"
+  api_key: null  # Set via environment variable OPENAI_API_KEY or set here
+  base_url: null  # Optional: for custom API endpoints
+  max_output_tokens: 16384
+  temperature: 0.7
+  strategy: "freeform"  # "hierarchical" or "flattened"
+
+# Data Configuration
+data:
+  icd10cm_tabular_path: "/Users/gnahum12345/projects/icd10_prediction/data/FY24-CMS-1785-F-ICD-10-Table-Index/icd10cm_tabular_2024.xml"
+  icd10_transcript_dataset_path: "/Users/gnahum12345/projects/icd10_prediction/data/Test_Project_ICD10_Dataset.csv"
+
+# Evaluation Configuration
+evaluation:
+  n_samples: 10  # Number of Monte Carlo samples
+  temperature_range: [0.3, 1.5]  # Temperature range for uncertainty quantification
+
+# Streamlit Configuration
+streamlit:
+  port: 8501
+  host: "localhost"
+

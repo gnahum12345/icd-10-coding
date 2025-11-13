@@ -6,7 +6,7 @@ from .evaluator import MetricsCalculator, EvaluationResults
 
 __all__ = [
     "ICD10HierarchyLoader",
-    "ICD10Dataset",
+    "ICD10TranscriptDataset",
     "ICD10Node",
     "BaseModel",
     "LLMModel",

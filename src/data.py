@@ -219,7 +219,7 @@ class ICD10HierarchyLoader:
         return result
 
 
-class ICD10Dataset:
+class ICD10TranscriptDataset:
     """Dataset for loading transcripts with ground truth ICD10 codes."""
     
     def __init__(self, csv_path: str, hierarchy_loader: Optional[ICD10HierarchyLoader] = None):
