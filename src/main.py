@@ -61,14 +61,17 @@ def process_one(i, config, use_uncertainity, hierarchy_loader, sample):
             temperature_range=tuple(config["evaluation"]["temperature_range"]),
         )
         pred_codes = result["codes"]
-        confidence = result["confidence"]
-        trace = result["trace_history"]
+        avg_confidence = result["avg_confidence"]
+        std_confidence = result["std_confidence"]
+
+        trace = model.trace_history
     else:
         pred_codes = model.predict(transcript)
-        confidence = -1
+        avg_confidence = []
+        std_confidence = []
         trace = model.trace_history
 
-    return i, pred_codes, gt_codes, confidence, trace
+    return i, pred_codes, gt_codes, avg_confidence, std_confidence, trace
 
 
 def main():
@@ -139,7 +142,8 @@ def main():
     print(f"\nEvaluating {n_samples} samples...")
     predictions = [None] * n_samples
     ground_truth = [None] * n_samples
-    confidences = [None] * n_samples
+    avg_confidences = [None] * n_samples
+    std_confidences = [None] * n_samples
     traces = [None] * n_samples
 
     max_workers = min(30, n_samples)
@@ -153,20 +157,24 @@ def main():
         }
 
         for future in tqdm(as_completed(futures), total=n_samples):
-            i, pred, gt, conf, trace = future.result()
+            i, pred, gt, avg_conf, std_conf, trace = future.result()
 
             predictions[i] = pred
             ground_truth[i] = gt
-            confidences[i] = conf
+            avg_confidences[i] = avg_conf
+            std_confidences[i] = std_conf
             traces[i] = trace
 
-            results.add_result(pred, gt, conf, trace)
+            results.add_result(pred, gt, avg_conf, std_conf, trace)
 
     print("\nComputing metrics...")
 
     # Compute metrics
     metrics = evaluator.compute_metrics(
-        predictions, ground_truth, confidences if args.uncertainty else None
+        predictions,
+        ground_truth,
+        avg_confidences if args.uncertainty else None,
+        std_confidences if args.uncertainty else None,
     )
     _ = evaluator.collect_wrong_cases(
         predictions, ground_truth, [t for th in traces for t in th]

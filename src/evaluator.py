@@ -14,7 +14,11 @@ class EvaluationResults:
 
     predictions: List[List[str]] = field(default_factory=list)
     ground_truth: List[List[str]] = field(default_factory=list)
-    confidences: List[float] = field(default_factory=list)
+
+    # NEW
+    avg_confidences: List[float] = field(default_factory=list)
+    std_confidences: List[float] = field(default_factory=list)
+
     traces: List[Dict[str, Any]] = field(default_factory=list)
     metrics: Dict[str, float] = field(default_factory=dict)
 
@@ -22,7 +26,8 @@ class EvaluationResults:
         self,
         prediction: List[str],
         ground_truth: List[str],
-        confidence: Optional[float] = None,
+        avg_confidence: Optional[float] = None,
+        std_confidence: Optional[float] = None,
         trace: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add a single prediction result.
@@ -35,8 +40,10 @@ class EvaluationResults:
         """
         self.predictions.append(prediction)
         self.ground_truth.append(ground_truth)
-        if confidence is not None:
-            self.confidences.append(confidence)
+        if avg_confidence is not None:
+            self.avg_confidences.append(avg_confidence)
+        if std_confidence is not None:
+            self.std_confidences.append(std_confidence)
         if trace is not None:
             self.traces.append(trace)
 
@@ -80,14 +87,16 @@ class MetricsCalculator:
         self,
         predictions: List[List[str]],
         ground_truth: List[List[str]],
-        confidences: Optional[List[float]] = None,
+        avg_confidences: Optional[List[float]] = None,
+        std_confidences: Optional[List[float]] = None,
     ) -> Dict[str, float]:
         """Compute all metrics.
 
         Args:
             predictions: List of predicted code lists
             ground_truth: List of ground truth code lists
-            confidences: Optional confidence scores
+            avg_confidences: Optional average within the monte carlo simulation of confidence scores
+            std_confidences: Optional standard deviation of the monte carlo simulation of confidence scores
 
         Returns:
             Dictionary of metrics
@@ -125,9 +134,9 @@ class MetricsCalculator:
             metrics.update(per_level_metrics)
 
         # Uncertainty metrics
-        if confidences:
+        if avg_confidences:
             uncertainty_metrics = self._uncertainty_metrics(
-                predictions, ground_truth, confidences
+                predictions, ground_truth, avg_confidences, std_confidences
             )
             metrics.update(uncertainty_metrics)
 
@@ -511,61 +520,72 @@ class MetricsCalculator:
         self,
         predictions: List[List[str]],
         ground_truth: List[List[str]],
-        confidences: List[float],
+        avg_confidences: List[float],
+        std_confidences: Optional[List[float]] = None,
     ) -> Dict[str, float]:
-        """Compute uncertainty metrics.
-
-        Args:
-            predictions: List of predicted code lists
-            ground_truth: List of ground truth code lists
-            confidences: Confidence scores
-
-        Returns:
-            Dictionary of uncertainty metrics
-        """
-        if len(confidences) != len(predictions):
-            return {}
-
-        # Calibration: correlation between confidence and accuracy
+        # Calibration uses *avg_confidences* only
         accuracies = [
             1.0 if set(pred) == set(gt) else 0.0
             for pred, gt in zip(predictions, ground_truth)
         ]
 
         calibration_correlation = (
-            np.corrcoef(confidences, accuracies)[0, 1] if len(confidences) > 1 else 0.0
+            np.corrcoef(avg_confidences, accuracies)[0, 1]
+            if len(avg_confidences) > 1
+            else 0.0
         )
 
-        # Confidence statistics
-        confidence_mean = np.mean(confidences)
-        confidence_std = np.std(confidences)
-
-        # Expected Calibration Error (ECE)
+        # ECE with avg_confidences
         n_bins = 10
         bin_boundaries = np.linspace(0, 1, n_bins + 1)
-        bin_lowers = bin_boundaries[:-1]
-        bin_uppers = bin_boundaries[1:]
-
         ece = 0.0
-        for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
-            # Find samples in this bin
+        # --- Flatten confidences & accuracies ---
+        flat_conf = []
+        flat_acc = []
+
+        for pred, gt, conf_dict in zip(predictions, ground_truth, avg_confidences):
+            for code in pred:
+                if code not in conf_dict:
+                    continue
+
+                # Rescale 1–10 → 0–1
+                conf = conf_dict[code] / 10.0
+                acc = 1.0 if code in gt else 0.0
+
+                flat_conf.append(conf)
+                flat_acc.append(acc)
+
+        # --- ECE computation ---
+        ece = 0.0
+        for lo, hi in zip(bin_boundaries[:-1], bin_boundaries[1:]):
             in_bin = [
-                (conf, acc)
-                for conf, acc in zip(confidences, accuracies)
-                if bin_lower <= conf < bin_upper
+                (conf, acc) for conf, acc in zip(flat_conf, flat_acc) if lo <= conf < hi
             ]
             if len(in_bin) > 0:
-                bin_confidences = [x[0] for x in in_bin]
-                bin_accuracies = [x[1] for x in in_bin]
-                bin_accuracy = np.mean(bin_accuracies)
-                bin_confidence = np.mean(bin_confidences)
-                bin_weight = len(in_bin) / len(confidences)
-                ece += bin_weight * abs(bin_accuracy - bin_confidence)
+                bin_conf = np.mean([x[0] for x in in_bin])
+                bin_acc = np.mean([x[1] for x in in_bin])
+                weight = len(in_bin) / len(flat_conf)
+                ece += weight * abs(bin_conf - bin_acc)
+
+        # --- Confidence statistics ---
+        all_avg_conf_vals = [
+            c for conf_dict in avg_confidences for c in conf_dict.values()
+        ]
+        all_std_conf_vals = [
+            s for std_dict in std_confidences for s in std_dict.values()
+        ]
+        avg_mean = float(np.mean(all_avg_conf_vals)) if all_avg_conf_vals else 0.0
+        avg_std = float(np.std(all_avg_conf_vals)) if all_avg_conf_vals else 0.0
+
+        std_mean = float(np.mean(all_std_conf_vals)) if all_std_conf_vals else 0.0
+        std_std = float(np.std(all_std_conf_vals)) if all_std_conf_vals else 0.0
 
         return {
             "calibration_correlation": calibration_correlation,
-            "confidence_mean": confidence_mean,
-            "confidence_std": confidence_std,
+            "average_confidence_mean": avg_mean,
+            "average_confidence_std": avg_std,
+            "std_confidence_mean": std_mean,
+            "std_confidence_std": std_std,
             "expected_calibration_error": ece,
         }
 

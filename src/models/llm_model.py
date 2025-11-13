@@ -9,6 +9,7 @@ from data import ICD10HierarchyLoader
 import logging
 from json_repair import repair_json
 from collections import defaultdict
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,7 @@ class LLMModel(BaseModel):
         # Using a conservative limit of 100k tokens
         if input_tokens > 16_000:
             logger.warning(
-                f"Prompt is {input_tokens} lenght which exceeds the 16k window!"
+                f"Prompt is {input_tokens} length which exceeds the 16k window!"
             )
 
         try:
@@ -324,7 +325,7 @@ class LLMModel(BaseModel):
                 code = item.get("code")
                 if not code:
                     continue
-                conf = item.get("confidence", 0.0)
+                conf = float(item.get("confidence", 0.0))
                 reason = item.get("reason", "")
                 confidence_map[code].append(conf)
                 if reason:
@@ -339,14 +340,10 @@ class LLMModel(BaseModel):
         # Sort by *average* confidence descending
         final_sorted = sorted(final_codes, key=lambda c: avg_conf[c], reverse=True)
 
-        merged_output = []
-        for code in final_sorted:
-            merged_output.append(
-                {
-                    "code": code,
-                    "avg_confidence": avg_conf[code],
-                    "std_confidence": std_conf[code],
-                    "reasons": reasoning_map.get(code, []),
-                }
-            )
-        return merged_output
+        return {
+            "codes": final_sorted,
+            "avg_confidence": avg_conf,
+            "std_confidence": std_conf,
+            "reasons": reasoning_map,
+            "trace_history": self.trace_history,
+        }

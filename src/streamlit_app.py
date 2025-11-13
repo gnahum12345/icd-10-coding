@@ -2,16 +2,15 @@
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yaml
 import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Optional
 
 from data import ICD10HierarchyLoader, ICD10TranscriptDataset
 from models import LLMModel
 from models.llm_model import LLMConfig
-from evaluator import MetricsCalculator, EvaluationResults
+from evaluator import MetricsCalculator
 
 try:
     import plotly.express as px
