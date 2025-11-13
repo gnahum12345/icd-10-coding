@@ -8,6 +8,7 @@ from models.base import BaseModel
 from data import ICD10HierarchyLoader
 import logging
 from json_repair import repair_json
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class LLMModel(BaseModel):
         num_tokens += 3  # Every reply is primed with <|start|>assistant<|message|>
         return num_tokens
 
-    def predict(self, transcript: str) -> List[str]:
+    def predict(self, transcript: str, include_outputs: bool = False) -> List[str]:
         """Predict ICD10 codes from transcript.
 
         Args:
@@ -100,14 +101,18 @@ class LLMModel(BaseModel):
         Returns:
             List of predicted ICD10 codes
         """
+        output = None
         if self.config.strategy == "hierarchical":
-            return self._predict_hierarchical(transcript)
+            output = self._predict_hierarchical(transcript)
         elif self.config.strategy == "flattened":
-            return self._predict_flattened(transcript)
+            output = self._predict_flattened(transcript)
         elif self.config.strategy == "freeform":
-            return self._predict_freeform(transcript)
+            output = self._predict_freeform(transcript)
         else:
             raise ValueError(f"Invalid strategy: {self.config.strategy}")
+        if include_outputs:
+            return output
+        return output[0]
 
     def _predict_hierarchical(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using hierarchical strategy.
@@ -138,15 +143,12 @@ class LLMModel(BaseModel):
             },
             {
                 "role": "user",
-                "content": f"""## ICD10-Codes:\n{self.hierarchy_loader.get_flattened_list()}""",
+                "content": f"""## ICD10-Codes: \n{self.hierarchy_loader.get_leaf_codes()}""",
             },
             {
                 "role": "user",
-                "content": """## Role: 
-            You are an Medical AI Assistant. 
-            ## Task: 
-            You are to listen on to a conversation from doctor/patient and predict the ICD10-codes along with the confidence and reason for choosing those codes. 
-            Please cite your exact source. Ensure the high confidence cases are first and make sure to get all cases! 
+                "content": """## Task: 
+            You are to listen on to a conversation from doctor/patient and predict the ICD10-codes along with the confidence and reason for choosing those codes. Ensure the high confidence cases are first and make sure to get all cases! 
             ## Output Format: 
             You must output a JSON only: 
             ```
@@ -156,8 +158,9 @@ class LLMModel(BaseModel):
                     'confidence': '<number 1-10> where 1 is not confident and 10 is perfectly confident', 
                     'code': '<ICD10-code>',
                 }}, 
-                .... 
-            ] 
+                ...
+            ]
+            ```
             """,
             },
             {"role": "user", "content": f"## Transcript:\n{transcript}"},
@@ -174,9 +177,7 @@ class LLMModel(BaseModel):
             },
             {
                 "role": "user",
-                "content": """## Role: 
-            You are an Medical AI Assistant. 
-            ## Task: 
+                "content": """## Task: 
             You are to listen on to a conversation from doctor/patient and predict the ICD10-codes along with the confidence and reason for choosing those codes. 
             Please cite your exact source. Ensure the high confidence cases are first and make sure to get all cases! 
             ## Output Format: 
@@ -198,7 +199,9 @@ class LLMModel(BaseModel):
 
         return self._predict_with_messages(messages)
 
-    def _predict_with_messages(self, messages: List[Dict[str, str]]) -> List[str]:
+    def _predict_with_messages(
+        self, messages: List[Dict[str, str]]
+    ) -> Tuple[List[str], Any]:
         self.trace_history.append({"messages": messages})
 
         # Call LLM
@@ -215,7 +218,7 @@ class LLMModel(BaseModel):
         codes = [output.get("code") for output in parsed_output]
         codes = [c for c in codes if c]  # filter nulls
         self.trace_history[-1].update({"output": parsed_output, "codes": codes})
-        return codes
+        return codes, parsed_output
 
     def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call LLM with messages.
@@ -236,11 +239,6 @@ class LLMModel(BaseModel):
             logger.warning(
                 f"Prompt is {input_tokens} lenght which exceeds the 16k window!"
             )
-        max_input_tokens = 132_000
-        if input_tokens > max_input_tokens:
-            error_msg = f"Input messages contain {input_tokens} tokens, which exceeds the maximum of {max_input_tokens}. Please reduce the transcript length."
-            logger.error(f"Error: {error_msg}")
-            return ""
 
         try:
             response = self.client.responses.create(
@@ -315,4 +313,40 @@ class LLMModel(BaseModel):
             Dictionary containing predictions, confidence, reasoning, and uncertainty metrics
         """
         # TODO: Implement uncertainty quantification
-        return {code: 1 for code in self.predict(transcript)}
+        results = []
+        confidence_map = defaultdict(list)
+        reasoning_map = defaultdict(list)
+
+        for _ in range(n_samples):
+            res, full_output = self.predict(transcript, True)
+            results.append(full_output)
+            for item in full_output:
+                code = item.get("code")
+                if not code:
+                    continue
+                conf = item.get("confidence", 0.0)
+                reason = item.get("reason", "")
+                confidence_map[code].append(conf)
+                if reason:
+                    reasoning_map[code].append(reason)
+
+        # ---- Build merged final output ----
+        final_codes = sorted(confidence_map.keys())
+
+        avg_conf = {c: float(np.mean(confidence_map[c])) for c in final_codes}
+        std_conf = {c: float(np.std(confidence_map[c])) for c in final_codes}
+
+        # Sort by *average* confidence descending
+        final_sorted = sorted(final_codes, key=lambda c: avg_conf[c], reverse=True)
+
+        merged_output = []
+        for code in final_sorted:
+            merged_output.append(
+                {
+                    "code": code,
+                    "avg_confidence": avg_conf[code],
+                    "std_confidence": std_conf[code],
+                    "reasons": reasoning_map.get(code, []),
+                }
+            )
+        return merged_output
