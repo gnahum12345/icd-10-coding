@@ -1,15 +1,11 @@
 """LLM model for ICD10 code extraction."""
 
-import json
-import re
-import random
 from typing import List, Dict, Tuple, Any, Optional, Literal
 from dataclasses import dataclass
-import numpy as np
 from openai import OpenAI
 import tiktoken
 from models.base import BaseModel
-from data import ICD10HierarchyLoader, ICD10Node
+from data import ICD10HierarchyLoader
 import logging
 from json_repair import repair_json
 
@@ -19,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LLMConfig:
     """Configuration for LLM model."""
+
     provider: str = "openai"  # "openai", "qwen", etc.
     model_name: str = "gpt-5-mini"
     api_key: Optional[str] = None
@@ -30,14 +27,12 @@ class LLMConfig:
 
 class LLMModel(BaseModel):
     """LLM model for ICD10 code extraction."""
-    
+
     def __init__(
-        self,
-        hierarchy_loader: ICD10HierarchyLoader,
-        config: Optional[LLMConfig] = None
+        self, hierarchy_loader: ICD10HierarchyLoader, config: Optional[LLMConfig] = None
     ):
         """Initialize LLM model.
-        
+
         Args:
             hierarchy_loader: ICD10HierarchyLoader instance
             config: LLM configuration
@@ -46,7 +41,7 @@ class LLMModel(BaseModel):
         self.config = config or LLMConfig()
         self.client = self._initialize_client()
         self.trace_history: List[Dict[str, Any]] = []
-    
+
     def _initialize_client(self) -> OpenAI:
         """Initialize OpenAI client."""
         kwargs = {}
@@ -54,35 +49,37 @@ class LLMModel(BaseModel):
             kwargs["api_key"] = self.config.api_key
         if self.config.base_url:
             kwargs["base_url"] = self.config.base_url
-        
+
         return OpenAI(**kwargs)
-    
+
     def _get_encoding(self) -> tiktoken.Encoding:
         """Get tiktoken encoding for the model.
-        
+
         Returns:
             tiktoken encoding
         """
         # Map model names to encodings
         # Most modern OpenAI models use cl100k_base
-        
+
         # Default to cl100k_base for most models
         encoding_name = "cl100k_base"
         return tiktoken.get_encoding(encoding_name)
-    
+
     def _count_tokens(self, messages: List[Dict[str, str]]) -> int:
         """Count tokens in messages.
-        
+
         Args:
             messages: List of message dictionaries with 'role' and 'content'
-            
+
         Returns:
             Total number of tokens
         """
         encoding = self._get_encoding()
-        tokens_per_message = 3  # Every message follows <|start|>{role/name}\n{content}<|end|>\n
+        tokens_per_message = (
+            3  # Every message follows <|start|>{role/name}\n{content}<|end|>\n
+        )
         tokens_per_name = 1  # If there's a name, the role is omitted
-        
+
         num_tokens = 0
         for message in messages:
             num_tokens += tokens_per_message
@@ -90,16 +87,16 @@ class LLMModel(BaseModel):
                 num_tokens += len(encoding.encode(str(value)))
                 if key == "name":
                     num_tokens += tokens_per_name
-        
+
         num_tokens += 3  # Every reply is primed with <|start|>assistant<|message|>
         return num_tokens
-    
+
     def predict(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript.
-        
+
         Args:
             transcript: Medical transcript text
-            
+
         Returns:
             List of predicted ICD10 codes
         """
@@ -111,39 +108,43 @@ class LLMModel(BaseModel):
             return self._predict_freeform(transcript)
         else:
             raise ValueError(f"Invalid strategy: {self.config.strategy}")
-    
 
     def _predict_hierarchical(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using hierarchical strategy.
-        
+
         Args:
             transcript: Medical transcript text
-            
+
         Returns:
             List of predicted ICD10 codes
         """
         # TODO: Implement hierarchical prediction strategy
         # For now, fall back to freeform
         return self._predict_freeform(transcript)
-    
+
     def _predict_flattened(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using flattened strategy.
-        
+
         Args:
             transcript: Medical transcript text
-            
+
         Returns:
             List of predicted ICD10 codes
         """
         # TODO: Implement flattened prediction strategy
         # For now, fall back to freeform
         return self._predict_freeform(transcript)
-    
+
     def _predict_freeform(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using freeform strategy."""
         messages = [
-            {"role": "system", "content": "You are a medical coding expert. Given a medical transcript, select the most appropriate ICD10 codes. Do not hallucinate and you must cite your source"},
-            {"role": "user", "content": """## Role: 
+            {
+                "role": "system",
+                "content": "You are a medical coding expert. Given a medical transcript, select the most appropriate ICD10 codes. Do not hallucinate and you must cite your source",
+            },
+            {
+                "role": "user",
+                "content": """## Role: 
             You are an Medical AI Assistant. 
             ## Task: 
             You are to listen on to a conversation from doctor/patient and predict the ICD10-codes along with the confidence and reason for choosing those codes. 
@@ -159,31 +160,29 @@ class LLMModel(BaseModel):
                 }}, 
                 .... 
             ] 
-            """}, 
-            {"role": "user", "content": f"## Transcript:\n{transcript}"}
+            """,
+            },
+            {"role": "user", "content": f"## Transcript:\n{transcript}"},
         ]
         # Store token count in trace history
 
-        self.trace_history.append({
-            "messages": messages
-        })
-        
+        self.trace_history.append({"messages": messages})
+
         # Call LLM
-        try: 
+        try:
             response = self._call_llm(messages, self.config.temperature)
-        except Exception as e: 
+        except Exception as e:
             logger.error("Error occured in LLM Response")
             logger.exception(e)
-            return [] 
+            return []
 
-        self.trace_history[-1].update({'raw_output': response})
+        self.trace_history[-1].update({"raw_output": response})
         # Parse response to extract ICD10 codes
         parsed_output = self._parse_llm_response(response)
-        codes = [output.get('code') for output in parsed_output]
-        codes = [c for c in codes if c] # filter nulls
-        self.trace_history[-1].update({'output': parsed_output, 'codes': codes})
-        return codes 
-        
+        codes = [output.get("code") for output in parsed_output]
+        codes = [c for c in codes if c]  # filter nulls
+        self.trace_history[-1].update({"output": parsed_output, "codes": codes})
+        return codes
 
     def _call_llm(self, messages: List[Dict[str, str]], temperature: float) -> str:
         """Call LLM with messages.
@@ -191,84 +190,94 @@ class LLMModel(BaseModel):
         Args:
             messages: List of message dictionaries
             temperature: Sampling temperature
-            
+
         Returns:
             LLM response
         """
         # Count input tokens
         input_tokens = self._count_tokens(messages)
-        
+
         # Check if tokens exceed reasonable limit (most models have context windows)
         # Using a conservative limit of 100k tokens
-        if input_tokens > 16_000: 
-            logger.warning(f"Prompt is {input_tokens} lenght which exceeds the 16k window!")
-        if input_tokens > 132_000:
+        if input_tokens > 16_000:
+            logger.warning(
+                f"Prompt is {input_tokens} lenght which exceeds the 16k window!"
+            )
+        max_input_tokens = 132_000
+        if input_tokens > max_input_tokens:
             error_msg = f"Input messages contain {input_tokens} tokens, which exceeds the maximum of {max_input_tokens}. Please reduce the transcript length."
             logger.error(f"Error: {error_msg}")
             return ""
-        
+
         try:
-            
             response = self.client.responses.create(
                 model=self.config.model_name,
                 input=messages,
                 temperature=None,
                 max_output_tokens=self.config.max_output_tokens,
                 metadata={"enable_prompt_caching": "True"},
-                #  Explicitly avoiding guided decoding to not over-influence the model. 
+                #  Explicitly avoiding guided decoding to not over-influence the model.
             )
             content = response.output_text
             # Update trace history with token usage
-            if hasattr(response, 'usage'):
+            if hasattr(response, "usage"):
                 usage = response.usage
                 if len(self.trace_history) > 0:
-                    self.trace_history[-1].update({
-                        "input_tokens": usage.input_tokens if hasattr(usage, 'input_tokens') else input_tokens,
-                        "output_tokens": usage.output_tokens if hasattr(usage, 'output_tokens') else 0,
-                        "total_tokens": usage.total_tokens if hasattr(usage, 'total_tokens') else input_tokens,
-                    })
+                    self.trace_history[-1].update(
+                        {
+                            "input_tokens": usage.input_tokens
+                            if hasattr(usage, "input_tokens")
+                            else input_tokens,
+                            "output_tokens": usage.output_tokens
+                            if hasattr(usage, "output_tokens")
+                            else 0,
+                            "total_tokens": usage.total_tokens
+                            if hasattr(usage, "total_tokens")
+                            else input_tokens,
+                        }
+                    )
             return content if content else ""
         except Exception as e:
             logger.error(f"Error calling LLM: {e}")
             # Include token count in error message
             logger.error(f"Input messages contained {input_tokens} tokens.")
             return ""
-    
+
     def _parse_llm_response(self, response: str) -> List[str]:
         """Parse LLM response to extract ICD10 codes.
-        
+
         Args:
             response: LLM response string
-            
+
         Returns:
             List of ICD10 codes
         """
-        if not response: 
+        if not response:
             logger.warning("Response is empty!")
             return []
-        try: 
+        try:
             decoded_object = repair_json(response, return_objects=True)
-            if isinstance(decoded_object, list): 
+            if isinstance(decoded_object, list):
                 return decoded_object
-            # add assertion/logging. 
+            # add assertion/logging.
             return [decoded_object]
-        except Exception as e: 
+        except Exception as e:
             logger.exception("Json repair failed", e)
-        return [] 
+        return []
 
     def predict_with_uncertainty(
         self,
         transcript: str,
         n_samples: int = 10,
-        temperature_range: Tuple[float, float] = (0.3, 1.5)
+        temperature_range: Tuple[float, float] = (0.3, 1.5),
     ) -> Dict[str, Any]:
         """Predict ICD10 codes with uncertainty quantification.
-        
+
         Args:
             transcript: Medical transcript text
             n_samples: Number of Monte Carlo samples
             temperature_range: Temperature range for sampling (min, max)
-            
+
         Returns:
             Dictionary containing predictions, confidence, reasoning, and uncertainty metrics
         """

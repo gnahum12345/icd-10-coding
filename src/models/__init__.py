@@ -4,4 +4,3 @@ from .base import BaseModel
 from .llm_model import LLMModel
 
 __all__ = ["BaseModel", "LLMModel"]
-

@@ -2,69 +2,64 @@ import argparse
 from pathlib import Path
 from data import ICD10HierarchyLoader, ICD10Node
 
-def main(): 
-    
+
+def main():
     parser = argparse.ArgumentParser(description="Explore ICD10 Hierarchy Loader")
     parser.add_argument(
         "--xml-path",
         type=str,
         default="../data/FY24-CMS-1785-F-ICD-10-Table-Index/icd10cm_tabular_2024.xml",
-        help="Path to ICD10 XML file"
+        help="Path to ICD10 XML file",
     )
     parser.add_argument(
         "--code",
         type=str,
         default=None,
-        help="ICD10 code to explore (e.g., I10, E11.29)"
+        help="ICD10 code to explore (e.g., I10, E11.29)",
     )
     parser.add_argument(
         "--show-children",
         type=str,
         default=None,
-        help="Show children of a specific code"
+        help="Show children of a specific code",
     )
     parser.add_argument(
         "--show-path",
         type=str,
         default=None,
-        help="Show path from root to a specific code"
+        help="Show path from root to a specific code",
     )
     parser.add_argument(
-        "--sample-codes",
-        type=int,
-        default=10,
-        help="Number of sample codes to display"
+        "--sample-codes", type=int, default=10, help="Number of sample codes to display"
     )
     parser.add_argument(
-        "--leaf-only",
-        action="store_true",
-        help="Show only leaf codes in samples"
+        "--leaf-only", action="store_true", help="Show only leaf codes in samples"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Load hierarchy
     print("=" * 70)
     print("ICD10 Hierarchy Loader - Explorer")
     print("=" * 70)
     print(f"\nLoading hierarchy from: {args.xml_path}")
-    
+
     xml_path = Path(args.xml_path)
     if not xml_path.exists():
         print(f"Error: XML file not found at {xml_path}")
         print("Please provide a valid path to the ICD10 XML file.")
         exit(1)
-    
+
     loader = ICD10HierarchyLoader(str(xml_path))
     root_node = loader.load()
-    
+
     print("✓ Hierarchy loaded successfully!")
     print()
-    
+
     # Display basic statistics
     all_codes = loader.get_all_codes()
     leaf_codes = loader.get_leaf_codes()
-    
+
     print("=" * 70)
     print("Hierarchy Statistics")
     print("=" * 70)
@@ -72,12 +67,16 @@ def main():
     print(f"Leaf codes: {len(leaf_codes)}")
     print(f"Non-leaf codes: {len(all_codes) - len(leaf_codes)}")
     print()
-    
+
     # Show sample codes
     print("=" * 70)
     print(f"Sample Codes ({'Leaf Only' if args.leaf_only else 'All'})")
     print("=" * 70)
-    sample_codes = leaf_codes[:args.sample_codes] if args.leaf_only else all_codes[1:args.sample_codes+1]  # Skip ROOT
+    sample_codes = (
+        leaf_codes[: args.sample_codes]
+        if args.leaf_only
+        else all_codes[1 : args.sample_codes + 1]
+    )  # Skip ROOT
     for code in sample_codes:
         node = loader.get_node(code)
         if node:
@@ -90,7 +89,7 @@ def main():
             if node.parent and node.parent.code != "ROOT":
                 print(f"  Parent: {node.parent.code} - {node.parent.description}")
     print()
-    
+
     # Explore specific code
     if args.code:
         print("=" * 70)
@@ -117,7 +116,7 @@ def main():
         else:
             print(f"Code '{args.code}' not found in hierarchy")
         print()
-    
+
     # Show children of a code
     if args.show_children:
         print("=" * 70)
@@ -129,7 +128,7 @@ def main():
             for child in children:
                 print(f"  {child.code}: {child.description}")
                 if child.is_leaf:
-                    print(f"    (Leaf node)")
+                    print("    (Leaf node)")
                 else:
                     print(f"    (Has {len(child.children)} children)")
         else:
@@ -139,7 +138,7 @@ def main():
             else:
                 print(f"Code '{args.show_children}' not found")
         print()
-    
+
     # Show path to root
     if args.show_path:
         print("=" * 70)
@@ -154,14 +153,16 @@ def main():
         else:
             print(f"Code '{args.show_path}' not found in hierarchy")
         print()
-    
+
     # Show hierarchy structure example
     print("=" * 70)
     print("Hierarchy Structure Example")
     print("=" * 70)
     print("\nShowing first few levels of hierarchy:\n")
-    
-    def print_tree(node: ICD10Node, level: int = 0, max_level: int = 3, max_children: int = 3):
+
+    def print_tree(
+        node: ICD10Node, level: int = 0, max_level: int = 3, max_children: int = 3
+    ):
         """Print tree structure."""
         if level > max_level:
             return
@@ -171,14 +172,16 @@ def main():
             for child in node.children[:max_children]:
                 print_tree(child, level + 1, max_level, max_children)
             if len(node.children) > max_children:
-                print(f"{indent}  ... and {len(node.children) - max_children} more children")
-    
+                print(
+                    f"{indent}  ... and {len(node.children) - max_children} more children"
+                )
+
     # Start from root and show first few chapters
     if root_node.children:
         for chapter in root_node.children[:3]:  # Show first 3 chapters
             print_tree(chapter, level=0, max_level=2, max_children=2)
             print()
-    
+
     print("=" * 70)
     print("Exploration Complete!")
     print("=" * 70)
