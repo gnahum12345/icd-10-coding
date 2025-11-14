@@ -1,7 +1,7 @@
 """Data loading and processing module for ICD10 code extraction."""
 
 import re
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from pathlib import Path
 import xml.etree.ElementTree as ET
