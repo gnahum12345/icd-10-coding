@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 import tiktoken
 from models.base import BaseModel
-from data import ICD10HierarchyLoader
+from data import ICD10HierarchyLoader, ICD10Node
 import logging
 from json_repair import repair_json
 from collections import defaultdict
@@ -115,18 +115,150 @@ class LLMModel(BaseModel):
             return output
         return output[0]
 
-    def _predict_hierarchical(self, transcript: str) -> List[str]:
+    def _predict_hierarchical(
+        self, transcript: str
+    ) -> Tuple[List[str], Dict[str, str]]:
         """Predict ICD10 codes from transcript using hierarchical strategy.
 
         Args:
             transcript: Medical transcript text
 
         Returns:
-            List of predicted ICD10 codes
+            Tuple of (predicted codes, reasoning dictionary)
+            - predicted codes: List of ICD10 codes
+            - reasoning: Dict mapping each code to its selection reasoning
         """
-        # TODO: Implement hierarchical prediction strategy
-        # For now, fall back to freeform
-        return self._predict_freeform(transcript)
+        root = self.hierarchy_loader.root_node
+        predictions = set()
+        reasoning_map = {}  # Track reasoning for each prediction
+        max_depth = 10
+
+        def ask_llm(node: ICD10Node, children: List[ICD10Node]) -> List[ICD10Node]:
+            """LLM decides which children are relevant (can be multiple)."""
+            if not children:
+                return []
+
+            child_block = "\n".join(
+                f"- {c.code}: {c.laymen_definition or c.description}" for c in children
+            )
+
+            node_desc = (
+                f"{node.code} — {node.description}"
+                if node.code != "ROOT"
+                else "ROOT (starting point)"
+            )
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an ICD10 hierarchical classifier. "
+                        "Select ALL child categories that are relevant to the transcript. "
+                        'Respond ONLY with JSON: {"selected": ["CODE1", "CODE2", ...], '
+                        '"reasoning": {"CODE1": "brief reason", "CODE2": "brief reason"}}.'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"CURRENT NODE: {node_desc}\n\n"
+                        f"CHILD OPTIONS:\n{child_block}\n\n"
+                        f"TRANSCRIPT:\n{transcript}\n\n"
+                        "Return JSON only with selected codes and reasoning for each. No explanation."
+                    ),
+                },
+            ]
+
+            try:
+                self.trace_history.append({"messages": messages})
+                resp = self._call_llm(messages)
+                print(resp)
+                data = self._parse_llm_response(resp)
+
+                # Handle both list and dict responses
+                if isinstance(data, list) and len(data) > 0:
+                    parsed = data[0] if isinstance(data[0], dict) else {}
+                elif isinstance(data, dict):
+                    parsed = data
+                else:
+                    parsed = {}
+
+                selected_codes = parsed.get("selected", [])
+                code_reasoning = parsed.get("reasoning", {})
+
+                # Store reasoning for selected codes
+                for code in selected_codes:
+                    if code not in reasoning_map:
+                        reasoning_map[code] = code_reasoning.get(
+                            code, "Selected during hierarchical traversal"
+                        )
+
+                code_lookup = {c.code: c for c in children}
+                return [code_lookup[c] for c in selected_codes if c in code_lookup]
+            except Exception as e:
+                logger.error(f"Error in ask_llm for node {node.code}: {e}")
+                return []
+
+        def explore(node: ICD10Node, depth: int, path: List[str]):
+            """
+            Recursive, multi-branch traversal.
+            Each node may spawn multiple next-level nodes.
+
+            Args:
+                node: Current node in traversal
+                depth: Current depth level
+                path: List of codes representing the path from root to current node
+            """
+            if depth >= max_depth:
+                # Depth exhausted → use node as final prediction
+                if node.code != "ROOT":
+                    predictions.add(node.code)
+                    if node.code not in reasoning_map:
+                        reasoning_map[node.code] = (
+                            f"Maximum depth reached at {' → '.join(path + [node.code])}"
+                        )
+                return
+
+            # Leaf node → final prediction
+            if node.is_leaf:
+                predictions.add(node.code)
+                if node.code not in reasoning_map:
+                    reasoning_map[node.code] = (
+                        f"Leaf node reached via path: {' → '.join(path + [node.code])}"
+                    )
+                return
+
+            children = node.children if hasattr(node, "children") else []
+            if not children:
+                if node.code != "ROOT":
+                    predictions.add(node.code)
+                    if node.code not in reasoning_map:
+                        reasoning_map[node.code] = (
+                            f"No further children available at {' → '.join(path + [node.code])}"
+                        )
+                return
+
+            # Ask LLM to choose ANY number of children (possibly many)
+            selected_children = ask_llm(node, children)
+
+            # No children selected → treat current node as terminal choice
+            if not selected_children:
+                if node.code != "ROOT":
+                    predictions.add(node.code)
+                    if node.code not in reasoning_map:
+                        reasoning_map[node.code] = (
+                            f"No relevant child categories found; selected this level ({' → '.join(path + [node.code])})"
+                        )
+                return
+
+            # Recurse into all selected children
+            for child in selected_children:
+                explore(child, depth + 1, path + [node.code])
+
+        # Start traversal from root
+        explore(root, depth=0, path=[])
+
+        return sorted(predictions), reasoning_map
 
     def _predict_flattened(self, transcript: str) -> List[str]:
         """Predict ICD10 codes from transcript using flattened strategy.

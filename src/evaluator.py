@@ -654,7 +654,6 @@ class MetricsCalculator:
 
         for idx, (pred, gt) in enumerate(zip(predictions, ground_truth)):
             if set(pred) != set(gt):
-                breakpoint()
                 wrong_cases.append(
                     {
                         "index": idx,

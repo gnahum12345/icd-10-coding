@@ -8,7 +8,7 @@ llm:
   base_url: null  # Optional: for custom API endpoints
   max_output_tokens: 16384
   temperature: 0.7
-  strategy: "freeform"  # "hierarchical" or "flattened"
+  strategy: "hierarchical"  # "hierarchical" or "flattened"
 
 # Data Configuration
 data:
